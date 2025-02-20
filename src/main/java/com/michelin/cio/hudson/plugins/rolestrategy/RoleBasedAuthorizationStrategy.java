@@ -1371,7 +1371,7 @@ public class RoleBasedAuthorizationStrategy extends AuthorizationStrategy {
 
       if (json.has(GLOBAL) && json.has(PROJECT) && oldStrategy instanceof RoleBasedAuthorizationStrategy) {
         RoleBasedAuthorizationStrategy strategy = (RoleBasedAuthorizationStrategy) oldStrategy;
-        Map<RoleType, RoleMap> maps = strategy.getRoleMaps();
+        
 
         String currentUser = DESCRIPTOR.getCurrentUser();
 
@@ -1380,7 +1380,7 @@ public class RoleBasedAuthorizationStrategy extends AuthorizationStrategy {
         details.put("changes", json.toString());
         
         AUDIT_LOGGER.log(Level.INFO, DESCRIPTOR.createAuditLog("ASSIGN_ROLES", details));
-
+        Map<RoleType, RoleMap> maps = strategy.getRoleMaps();
         for (Map.Entry<RoleType, RoleMap> map : maps.entrySet()) {
           // Get roles and skip non-existent role entries (backward-comp)
           RoleMap roleMap = map.getValue();
