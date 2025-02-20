@@ -105,6 +105,7 @@ import org.kohsuke.stapler.verb.POST;
 public class RoleBasedAuthorizationStrategy extends AuthorizationStrategy {
 
   private static Logger LOGGER = Logger.getLogger(RoleBasedAuthorizationStrategy.class.getName());
+  private static final Logger AUDIT_LOGGER = Logger.getLogger(RoleBasedAuthorizationStrategy.class.getName() + ".audit");
 
   public static final String GLOBAL = "globalRoles";
   public static final String PROJECT = "projectRoles";
@@ -427,13 +428,24 @@ public class RoleBasedAuthorizationStrategy extends AuthorizationStrategy {
                             @QueryParameter(required = false) boolean overwrite)
           throws IOException {
     checkAdminPerm();
+    final String currentUser = DESCRIPTOR.getCurrentUser();
     List<String> permissionList = Arrays.asList(permissionIds.split(","));
     Set<Permission> permissionSet = PermissionHelper.fromStrings(permissionList, true);
-    PermissionTemplate template = new PermissionTemplate(permissionSet, name);
+    
+    final PermissionTemplate template = new PermissionTemplate(permissionSet, name);
     if (!overwrite && hasPermissionTemplate(name)) {
       Stapler.getCurrentResponse().sendError(HttpServletResponse.SC_BAD_REQUEST, "A template with name " + name + " already exists.");
       return;
     }
+    
+    Map<String, Object> details = DESCRIPTOR.createBaseAuditDetails(currentUser);
+    details.put("action_type", "create_template");
+    details.put("template_name", name);
+    details.put("permissions", permissionIds);
+    details.put("overwrite", overwrite);
+    
+    AUDIT_LOGGER.log(Level.INFO, DESCRIPTOR.createAuditLog("CREATE_TEMPLATE", details));
+    
     permissionTemplates.put(name, template);
     refreshPermissionsFromTemplate();
     persistChanges();
@@ -454,11 +466,22 @@ public class RoleBasedAuthorizationStrategy extends AuthorizationStrategy {
   public void doRemoveTemplates(@QueryParameter(required = true) String names,
                                 @QueryParameter(required = false) boolean force) throws IOException {
     checkAdminPerm();
+    String currentUser = DESCRIPTOR.getCurrentUser();
     String[] split = names.split(",");
     for (String templateName : split) {
       templateName = templateName.trim();
       PermissionTemplate pt = getPermissionTemplate(templateName);
       if (pt != null && (!pt.isUsed() || force)) {
+        Map<String, Object> details = DESCRIPTOR.createBaseAuditDetails(currentUser);
+        details.put("action_type", "remove_template");
+        details.put("template_name", templateName);
+        details.put("force", force);
+        details.put("permissions", pt.getPermissions().stream()
+            .map(Permission::getId)
+            .collect(Collectors.joining(",")));
+        
+        AUDIT_LOGGER.log(Level.INFO, DESCRIPTOR.createAuditLog("REMOVE_TEMPLATE", details));
+        
         permissionTemplates.remove(templateName);
         RoleMap roleMap = getRoleMap(RoleType.Project);
         for (Role role : roleMap.getRoles()) {
@@ -515,6 +538,7 @@ public class RoleBasedAuthorizationStrategy extends AuthorizationStrategy {
     Set<Permission> permissionSet = PermissionHelper.fromStrings(permissionList, true);
 
     Role role = new Role(roleName, pttrn, permissionSet);
+    final String currentUser = DESCRIPTOR.getCurrentUser();
 
     if (RoleBasedAuthorizationStrategy.PROJECT.equals(type) && templateName != null) {
       if (!hasPermissionTemplate(template)) {
@@ -534,6 +558,17 @@ public class RoleBasedAuthorizationStrategy extends AuthorizationStrategy {
       }
     }
     addRole(roleType, role);
+
+    Map<String, Object> details = DESCRIPTOR.createBaseAuditDetails(currentUser);
+    details.put("action_type", "create_role");
+    details.put("role_name", roleName);
+    details.put("role_type", type);
+    details.put("permissions", permissionIds);
+    details.put("pattern", pttrn);
+    details.put("template", templateName);
+    details.put("overwrite", overwriteb);
+    
+    AUDIT_LOGGER.log(Level.INFO, DESCRIPTOR.createAuditLog("CREATE_ROLE", details));
     persistChanges();
   }
 
@@ -554,12 +589,21 @@ public class RoleBasedAuthorizationStrategy extends AuthorizationStrategy {
   public void doRemoveRoles(@QueryParameter(required = true) String type, @QueryParameter(required = true) String roleNames)
       throws IOException {
     checkAdminPerm();
-
+    String currentUser = DESCRIPTOR.getCurrentUser();
     RoleMap roleMap = getRoleMap(RoleType.fromString(type));
     String[] split = roleNames.split(",");
     for (String roleName : split) {
       Role role = roleMap.getRole(roleName);
       if (role != null) {
+        Map<String, Object> details = DESCRIPTOR.createBaseAuditDetails(currentUser);
+        details.put("action_type", "remove_role");
+        details.put("role_name", roleName);
+        details.put("role_type", type);
+        details.put("permissions", role.getPermissions().stream()
+            .map(Permission::getId)
+            .collect(Collectors.joining(",")));
+        
+        AUDIT_LOGGER.log(Level.INFO, DESCRIPTOR.createAuditLog("REMOVE_ROLE", details));
         roleMap.removeRole(role);
       }
     }
@@ -620,7 +664,19 @@ public class RoleBasedAuthorizationStrategy extends AuthorizationStrategy {
     final RoleType roleType = RoleType.fromString(type);
     Role role = getRoleMap(roleType).getRole(roleName);
     if (role != null) {
+      String currentUser = DESCRIPTOR.getCurrentUser();
       assignRole(roleType, role, new PermissionEntry(AuthorizationType.USER, user));
+      
+      Map<String, Object> details = DESCRIPTOR.createBaseAuditDetails(currentUser);
+      details.put("action_type", "assign_user_role");
+      details.put("role_name", roleName);
+      details.put("role_type", type);
+      details.put("target_user", user);
+      details.put("permissions", role.getPermissions().stream()
+          .map(Permission::getId)
+          .collect(Collectors.joining(",")));
+      
+      AUDIT_LOGGER.log(Level.INFO, DESCRIPTOR.createAuditLog("ASSIGN_USER_ROLE", details));
     }
     persistChanges();
   }
@@ -648,7 +704,19 @@ public class RoleBasedAuthorizationStrategy extends AuthorizationStrategy {
     final RoleType roleType = RoleType.fromString(type);
     Role role = getRoleMap(roleType).getRole(roleName);
     if (role != null) {
+      String currentUser = DESCRIPTOR.getCurrentUser();
       assignRole(roleType, role, new PermissionEntry(AuthorizationType.GROUP, group));
+      
+      Map<String, Object> details = DESCRIPTOR.createBaseAuditDetails(currentUser);
+      details.put("action_type", "assign_group_role");
+      details.put("role_name", roleName);
+      details.put("role_type", type);
+      details.put("target_group", group);
+      details.put("permissions", role.getPermissions().stream()
+          .map(Permission::getId)
+          .collect(Collectors.joining(",")));
+      
+      AUDIT_LOGGER.log(Level.INFO, DESCRIPTOR.createAuditLog("ASSIGN_GROUP_ROLE", details));
     }
     persistChanges();
   }
@@ -1296,6 +1364,14 @@ public class RoleBasedAuthorizationStrategy extends AuthorizationStrategy {
         RoleBasedAuthorizationStrategy strategy = (RoleBasedAuthorizationStrategy) oldStrategy;
         Map<RoleType, RoleMap> maps = strategy.getRoleMaps();
 
+        String currentUser = DESCRIPTOR.getCurrentUser();
+
+        Map<String, Object> details = DESCRIPTOR.createBaseAuditDetails(currentUser);
+        details.put("action_type", "assign_roles");
+        details.put("changes", json.toString());
+        
+        AUDIT_LOGGER.log(Level.INFO, DESCRIPTOR.createAuditLog("ASSIGN_ROLES", details));
+
         for (Map.Entry<RoleType, RoleMap> map : maps.entrySet()) {
           // Get roles and skip non-existent role entries (backward-comp)
           RoleMap roleMap = map.getValue();
@@ -1367,6 +1443,7 @@ public class RoleBasedAuthorizationStrategy extends AuthorizationStrategy {
     public AuthorizationStrategy newInstance(StaplerRequest req, JSONObject formData) {
       AuthorizationStrategy oldStrategy = instance().getAuthorizationStrategy();
       RoleBasedAuthorizationStrategy strategy;
+      String currentUser = getCurrentUser();
 
       // If the form contains data, it means the method has been called by plugin
       // specifics forms, and we need to handle it.
@@ -1376,6 +1453,12 @@ public class RoleBasedAuthorizationStrategy extends AuthorizationStrategy {
         readRoles(formData, RoleType.Project, strategy, (RoleBasedAuthorizationStrategy) oldStrategy);
         readRoles(formData, RoleType.Slave, strategy, (RoleBasedAuthorizationStrategy) oldStrategy);
         strategy.permissionTemplates = ((RoleBasedAuthorizationStrategy) oldStrategy).permissionTemplates;
+
+        Map<String, Object> details = createBaseAuditDetails(currentUser);
+        details.put("action_type", "update_role_permissions");
+        details.put("changes", formData.toString());
+        
+        AUDIT_LOGGER.log(Level.INFO, createAuditLog("UPDATE_PERMISSIONS", details));
       } else if (oldStrategy instanceof RoleBasedAuthorizationStrategy) {
         // When called from Hudson Manage panel, but was already on a role-based
         // strategy
@@ -1389,6 +1472,12 @@ public class RoleBasedAuthorizationStrategy extends AuthorizationStrategy {
         Role adminRole = createAdminRole();
         strategy.addRole(RoleType.Global, adminRole);
         strategy.assignRole(RoleType.Global, adminRole, new PermissionEntry(AuthorizationType.USER, getCurrentUser()));
+
+        Map<String, Object> details = createBaseAuditDetails(currentUser);
+        details.put("action_type", "initialize_role_strategy");
+        details.put("admin_user", currentUser);
+        
+        AUDIT_LOGGER.log(Level.INFO, createAuditLog("INIT_STRATEGY", details));
       }
 
       return strategy;
@@ -1619,7 +1708,7 @@ public class RoleBasedAuthorizationStrategy extends AuthorizationStrategy {
       if (sid.equals("anonymous") && type == AuthorizationType.EITHER) {
         // system reserved user
         return FormValidation.respond(FormValidation.Kind.OK,
-                formatUserGroupValidationResponse(type, escapedSid,
+                ValidationUtil.formatUserGroupValidationResponse(type, escapedSid,
             "Internal user found; but permissions would also be granted to a group of this name", true));
       }
 
@@ -1633,14 +1722,14 @@ public class RoleBasedAuthorizationStrategy extends AuthorizationStrategy {
               return groupValidation;
             }
             return FormValidation.respond(FormValidation.Kind.OK,
-                    formatNonExistentUserGroupValidationResponse(type, escapedSid, "Group not found"));
+                    ValidationUtil.formatNonExistentUserGroupValidationResponse(type, escapedSid, "Group not found"));
           case USER:
             userValidation = ValidationUtil.validateUser(sid, sr, false);
             if (userValidation != null) {
               return userValidation;
             }
             return FormValidation.respond(FormValidation.Kind.OK,
-                    formatNonExistentUserGroupValidationResponse(type, escapedSid, "User not found"));
+                    ValidationUtil.formatNonExistentUserGroupValidationResponse(type, escapedSid, "User not found"));
           case EITHER:
             userValidation = ValidationUtil.validateUser(sid, sr, true);
             if (userValidation != null) {
@@ -1651,7 +1740,7 @@ public class RoleBasedAuthorizationStrategy extends AuthorizationStrategy {
               return groupValidation;
             }
             return FormValidation.respond(FormValidation.Kind.OK,
-                formatNonExistentUserGroupValidationResponse(type, escapedSid, "User or group not found", true));
+                ValidationUtil.formatNonExistentUserGroupValidationResponse(type, escapedSid, "User or group not found", true));
           default:
             return FormValidation.error("Unexpected type: " + type);
         }
@@ -1666,6 +1755,22 @@ public class RoleBasedAuthorizationStrategy extends AuthorizationStrategy {
     public boolean hasAmbiguousEntries(SortedMap<Role, Set<PermissionEntry>> grantedRoles) {
       return grantedRoles.entrySet().stream()
           .anyMatch(entry -> entry.getValue().stream().anyMatch(pe -> pe.getType() == AuthorizationType.EITHER));
+    }
+
+    private String createAuditLog(String action, Map<String, Object> details) {
+      JSONObject json = new JSONObject();
+      json.put("timestamp", System.currentTimeMillis());
+      json.put("action", action);
+      json.put("details", details);
+      return json.toString();
+    }
+
+    private Map<String, Object> createBaseAuditDetails(String actor) {
+      Map<String, Object> details = new HashMap<>();
+      details.put("actor", actor);
+      details.put("timestamp", System.currentTimeMillis());
+      details.put("jenkins_url", Jenkins.get().getRootUrl());
+      return details;
     }
   }
 }
