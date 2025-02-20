@@ -1081,11 +1081,20 @@ public class RoleBasedAuthorizationStrategy extends AuthorizationStrategy {
    */
   @Restricted(NoExternalUse.class)
   public void validateConfig() {
-    List<PermissionEntry> sids = new ArrayList<>();
-    sids.addAll(getSidEntries(RoleBasedAuthorizationStrategy.GLOBAL));
-    sids.addAll(getSidEntries(RoleBasedAuthorizationStrategy.SLAVE));
-    sids.addAll(getSidEntries(RoleBasedAuthorizationStrategy.PROJECT));
-    AmbiguousSidsAdminMonitor.get().updateEntries(sids);
+    try {
+      List<PermissionEntry> sids = new ArrayList<>();
+      sids.addAll(getSidEntries(RoleBasedAuthorizationStrategy.GLOBAL));
+      sids.addAll(getSidEntries(RoleBasedAuthorizationStrategy.SLAVE));
+      sids.addAll(getSidEntries(RoleBasedAuthorizationStrategy.PROJECT));
+      AmbiguousSidsAdminMonitor monitor = AmbiguousSidsAdminMonitor.get();
+      if (monitor != null) {
+        monitor.updateEntries(sids);
+      } else {
+        LOGGER.log(Level.WARNING, "AmbiguousSidsAdminMonitor not found - skipping ambiguous SIDs validation");
+      }
+    } catch (IllegalStateException e) {
+      LOGGER.log(Level.WARNING, "Failed to validate configuration: {0}", e.getMessage());
+    }
   }
 
   /**
