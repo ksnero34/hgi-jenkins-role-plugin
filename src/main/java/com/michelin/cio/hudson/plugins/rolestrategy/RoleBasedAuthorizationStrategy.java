@@ -66,6 +66,7 @@ import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collection;
 import java.util.Collections;
+import java.util.Date;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
@@ -73,8 +74,11 @@ import java.util.Map;
 import java.util.Set;
 import java.util.SortedMap;
 import java.util.TreeMap;
+import java.util.logging.FileHandler;
+import java.util.logging.Handler;
 import java.util.logging.Level;
-import java.util.logging.Logger;
+import java.util.logging.LogRecord;
+import java.util.logging.SimpleFormatter;
 import java.util.regex.Pattern;
 import java.util.regex.PatternSyntaxException;
 import java.util.stream.Collectors;
@@ -96,6 +100,10 @@ import org.kohsuke.stapler.StaplerResponse;
 import org.kohsuke.stapler.interceptor.RequirePOST;
 import org.kohsuke.stapler.verb.GET;
 import org.kohsuke.stapler.verb.POST;
+import hudson.logging.LogRecorder;
+import hudson.logging.LogRecorderManager;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 /**
  * Role-based authorization strategy.
@@ -104,8 +112,35 @@ import org.kohsuke.stapler.verb.POST;
  */
 public class RoleBasedAuthorizationStrategy extends AuthorizationStrategy {
 
-  private static Logger LOGGER = Logger.getLogger(RoleBasedAuthorizationStrategy.class.getName());
-  private static final Logger AUDIT_LOGGER = Logger.getLogger(RoleBasedAuthorizationStrategy.class.getName() + ".audit");
+  private static final Logger LOGGER = LoggerFactory.getLogger(RoleBasedAuthorizationStrategy.class);
+  private static final Logger AUDIT_LOGGER = LoggerFactory.getLogger(RoleBasedAuthorizationStrategy.class.getName() + ".audit");
+
+  @Initializer(after = InitMilestone.PLUGINS_STARTED)
+  public static void initLogRecorder() {
+    try {
+      // Jenkins의 로그 레코더 설정
+      Jenkins jenkins = Jenkins.get();
+      LogRecorderManager mgr = jenkins.getLog();
+      Map<String, LogRecorder> recorders = mgr.getRecorders().stream()
+          .collect(Collectors.toMap(LogRecorder::getName, r -> r));
+      LogRecorder recorder = recorders.get("Role Strategy Audit");
+      
+      // 기존 레코더가 없으면 새로 생성
+      if (recorder == null) {
+        recorder = new LogRecorder("Role Strategy Audit");
+        mgr.getRecorders().add(recorder);
+      }
+
+      // 로그 설정 추가
+      recorder.getLoggers().add(
+        new LogRecorder.Target(RoleBasedAuthorizationStrategy.class.getName(), Level.ALL)
+      );
+      
+      LOGGER.info("Role Strategy audit logging configured");
+    } catch (Exception e) {
+      LOGGER.error("Failed to configure Role Strategy audit logging", e);
+    }
+  }
 
   public static final String GLOBAL = "globalRoles";
   public static final String PROJECT = "projectRoles";
@@ -444,7 +479,7 @@ public class RoleBasedAuthorizationStrategy extends AuthorizationStrategy {
     details.put("permissions", permissionIds);
     details.put("overwrite", overwrite);
     
-    AUDIT_LOGGER.log(Level.INFO, DESCRIPTOR.createAuditLog("CREATE_TEMPLATE", details));
+    AUDIT_LOGGER.info(DESCRIPTOR.createAuditLog("CREATE_TEMPLATE", details));
     
     permissionTemplates.put(name, template);
     refreshPermissionsFromTemplate();
@@ -480,7 +515,7 @@ public class RoleBasedAuthorizationStrategy extends AuthorizationStrategy {
             .map(Permission::getId)
             .collect(Collectors.joining(",")));
         
-        AUDIT_LOGGER.log(Level.INFO, DESCRIPTOR.createAuditLog("REMOVE_TEMPLATE", details));
+        AUDIT_LOGGER.info(DESCRIPTOR.createAuditLog("REMOVE_TEMPLATE", details));
         
         permissionTemplates.remove(templateName);
         RoleMap roleMap = getRoleMap(RoleType.Project);
@@ -568,7 +603,7 @@ public class RoleBasedAuthorizationStrategy extends AuthorizationStrategy {
     details.put("template", templateName);
     details.put("overwrite", overwriteb);
     
-    AUDIT_LOGGER.log(Level.INFO, DESCRIPTOR.createAuditLog("CREATE_ROLE", details));
+    AUDIT_LOGGER.info(DESCRIPTOR.createAuditLog("CREATE_ROLE", details));
     persistChanges();
   }
 
@@ -603,7 +638,7 @@ public class RoleBasedAuthorizationStrategy extends AuthorizationStrategy {
             .map(Permission::getId)
             .collect(Collectors.joining(",")));
         
-        AUDIT_LOGGER.log(Level.INFO, DESCRIPTOR.createAuditLog("REMOVE_ROLE", details));
+        AUDIT_LOGGER.info(DESCRIPTOR.createAuditLog("REMOVE_ROLE", details));
         roleMap.removeRole(role);
       }
     }
@@ -676,7 +711,7 @@ public class RoleBasedAuthorizationStrategy extends AuthorizationStrategy {
           .map(Permission::getId)
           .collect(Collectors.joining(",")));
       
-      AUDIT_LOGGER.log(Level.INFO, DESCRIPTOR.createAuditLog("ASSIGN_USER_ROLE", details));
+      AUDIT_LOGGER.info(DESCRIPTOR.createAuditLog("ASSIGN_USER_ROLE", details));
     }
     persistChanges();
   }
@@ -716,7 +751,7 @@ public class RoleBasedAuthorizationStrategy extends AuthorizationStrategy {
           .map(Permission::getId)
           .collect(Collectors.joining(",")));
       
-      AUDIT_LOGGER.log(Level.INFO, DESCRIPTOR.createAuditLog("ASSIGN_GROUP_ROLE", details));
+      AUDIT_LOGGER.info(DESCRIPTOR.createAuditLog("ASSIGN_GROUP_ROLE", details));
     }
     persistChanges();
   }
@@ -1087,13 +1122,9 @@ public class RoleBasedAuthorizationStrategy extends AuthorizationStrategy {
       sids.addAll(getSidEntries(RoleBasedAuthorizationStrategy.SLAVE));
       sids.addAll(getSidEntries(RoleBasedAuthorizationStrategy.PROJECT));
       AmbiguousSidsAdminMonitor monitor = AmbiguousSidsAdminMonitor.get();
-      if (monitor != null) {
-        monitor.updateEntries(sids);
-      } else {
-        LOGGER.log(Level.WARNING, "AmbiguousSidsAdminMonitor not found - skipping ambiguous SIDs validation");
-      }
+      monitor.updateEntries(sids);
     } catch (IllegalStateException e) {
-      LOGGER.log(Level.WARNING, "Failed to validate configuration: {0}", e.getMessage());
+      LOGGER.warn("Failed to validate configuration: {}", e.getMessage());
     }
   }
 
@@ -1259,7 +1290,7 @@ public class RoleBasedAuthorizationStrategy extends AuthorizationStrategy {
                   try {
                     authType = AuthorizationType.valueOf(entryTypeValue);
                   } catch (IllegalArgumentException ex) {
-                    LOGGER.log(Level.WARNING, "Unknown AuthorizationType {0} for SID {1} in Role {2}/{3}",
+                    LOGGER.warn("Unknown AuthorizationType {} for SID {} in Role {}/{}",
                         new Object[] { entryTypeValue, sid, type, name });
                     throw ex;
                   }
@@ -1369,17 +1400,15 @@ public class RoleBasedAuthorizationStrategy extends AuthorizationStrategy {
       JSONObject json = req.getSubmittedForm();
       AuthorizationStrategy oldStrategy = instance().getAuthorizationStrategy();
 
-      if (json.has(GLOBAL) && json.has(PROJECT) && oldStrategy instanceof RoleBasedAuthorizationStrategy) {
-        RoleBasedAuthorizationStrategy strategy = (RoleBasedAuthorizationStrategy) oldStrategy;
-        
-
+      if (json.has(GLOBAL) && json.has(PROJECT) && oldStrategy instanceof RoleBasedAuthorizationStrategy) {  
         String currentUser = DESCRIPTOR.getCurrentUser();
 
         Map<String, Object> details = DESCRIPTOR.createBaseAuditDetails(currentUser);
         details.put("action_type", "assign_roles");
         details.put("changes", json.toString());
         
-        AUDIT_LOGGER.log(Level.INFO, DESCRIPTOR.createAuditLog("ASSIGN_ROLES", details));
+        AUDIT_LOGGER.info(DESCRIPTOR.createAuditLog("ASSIGN_ROLES", details));
+        RoleBasedAuthorizationStrategy strategy = (RoleBasedAuthorizationStrategy) oldStrategy;
         Map<RoleType, RoleMap> maps = strategy.getRoleMaps();
         for (Map.Entry<RoleType, RoleMap> map : maps.entrySet()) {
           // Get roles and skip non-existent role entries (backward-comp)
@@ -1467,7 +1496,7 @@ public class RoleBasedAuthorizationStrategy extends AuthorizationStrategy {
         details.put("action_type", "update_role_permissions");
         details.put("changes", formData.toString());
         
-        AUDIT_LOGGER.log(Level.INFO, createAuditLog("UPDATE_PERMISSIONS", details));
+        AUDIT_LOGGER.info(DESCRIPTOR.createAuditLog("UPDATE_PERMISSIONS", details));
       } else if (oldStrategy instanceof RoleBasedAuthorizationStrategy) {
         // When called from Hudson Manage panel, but was already on a role-based
         // strategy
@@ -1486,7 +1515,7 @@ public class RoleBasedAuthorizationStrategy extends AuthorizationStrategy {
         details.put("action_type", "initialize_role_strategy");
         details.put("admin_user", currentUser);
         
-        AUDIT_LOGGER.log(Level.INFO, createAuditLog("INIT_STRATEGY", details));
+        AUDIT_LOGGER.info(DESCRIPTOR.createAuditLog("INIT_STRATEGY", details));
       }
 
       return strategy;
